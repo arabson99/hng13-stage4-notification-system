@@ -92,6 +92,7 @@ curl -X POST http://localhost:8001/users/1/preferences \
   -H "Authorization: Bearer YOUR_TOKEN_HERE" \
   -H "Content-Type: application/json" \
   -d '{
+    "user_id": 1,
     "notification_type": "email",
     "channel": "marketing",
     "enabled": true
