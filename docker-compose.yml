@@ -1,36 +1,59 @@
- 
-
+version: '3.9'
 services:
-  postgres:
-    image: postgres:16
-    container_name: user-service-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: notification_db
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
     ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: user
+      RABBITMQ_DEFAULT_PASS: pass
 
   redis:
-    image: redis:7-alpine
-    container_name: redis-service
-    restart: unless-stopped
+    image: redis:7
+    container_name: redis
     ports:
       - "6379:6379"
+
+  api_gateway:
+    build: ./services/api_gateway
+    env_file: ./services/api_gateway/.env
+    container_name: api_gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      - rabbitmq
+      - redis
+
+  template_db:
+    image: postgres:16-alpine
+    container_name: template_db
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: templates_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - template_pg:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD-SHELL", "pg_isready -U user -d templates_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  template_service:
+    build: ./services/template-service
+    container_name: template_service
+    environment:
+      DATABASE_URL: postgresql+psycopg2://user:pass@template_db:5432/templates_db
+      PORT: 8082
+    ports:
+      - "8082:8082"
+    depends_on:
+      template_db:
+        condition: service_healthy
 
 volumes:
-  postgres_data:
-
+  template_pg:
