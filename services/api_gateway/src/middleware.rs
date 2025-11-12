@@ -1,51 +1,58 @@
-use actix_web::{
-  dev::{Service, ServiceRequest, ServiceResponse, Transform},
-  Error,
-};
-use actix_web::http::header::{HeaderName, HeaderValue};
-use futures_util::future::{ready, Ready, LocalBoxFuture};
-use std::task::{Context, Poll};
+use actix_web::{dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform}, Error, http::header};
+use futures_util::future::{ok, Ready, LocalBoxFuture};
+use uuid::Uuid;
 
 pub struct CorrelationId;
 
 impl<S, B> Transform<S, ServiceRequest> for CorrelationId
 where
-  S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
-  B: 'static,
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
 {
-  type Response = ServiceResponse<B>;
-  type Error = Error;
-  type InitError = ();
-  type Transform = CorrelationIdMiddleware<S>;
-  type Future = Ready<Result<Self::Transform, Self::InitError>>;
+    type Response = ServiceResponse<B>;
+    type Error = Error;
+    type Transform = CorrelationIdMiddleware<S>;
+    type InitError = ();
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
 
-  fn new_transform(&self, service: S) -> Self::Future {
-    ready(Ok(CorrelationIdMiddleware { service }))
-  }
+    fn new_transform(&self, service: S) -> Self::Future {
+        ok(CorrelationIdMiddleware { service })
+    }
 }
 
-pub struct CorrelationIdMiddleware<S> { service: S }
+pub struct CorrelationIdMiddleware<S> {
+    service: S,
+}
 
 impl<S, B> Service<ServiceRequest> for CorrelationIdMiddleware<S>
 where
-  S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
-  B: 'static,
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,
 {
-  type Response = ServiceResponse<B>;
-  type Error = Error;
-  type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
+    type Response = ServiceResponse<B>;
+    type Error = Error;
+    type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
 
-  fn poll_ready(&self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-    Poll::Ready(Ok(()))
-  }
+    forward_ready!(service);
 
-  fn call(&self, mut req: ServiceRequest) -> Self::Future {
-    if req.headers().get("x-correlation-id").is_none() {
-      let name = HeaderName::from_static("x-correlation-id");
-      let value = HeaderValue::from_str(&uuid::Uuid::new_v4().to_string()).unwrap();
-      req.headers_mut().insert(name, value);
+    fn call(&self, mut req: ServiceRequest) -> Self::Future {
+        let header_name = header::HeaderName::from_static("x-correlation-id");
+        let cid = req.headers().get(&header_name)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+        req.headers_mut().insert(
+            header_name.clone(),
+            header::HeaderValue::from_str(&cid).unwrap_or_else(|_| header::HeaderValue::from_static("invalid")),
+        );
+
+        let fut = self.service.call(req);
+        Box::pin(async move {
+            let mut res = fut.await?;
+            res.headers_mut().insert(
+                header_name,
+                header::HeaderValue::from_str(&cid).unwrap_or_else(|_| header::HeaderValue::from_static("invalid")),
+            );
+            Ok(res)
+        })
     }
-    let fut = self.service.call(req);
-    Box::pin(async move { let res = fut.await?; Ok(res) })
-  }
 }

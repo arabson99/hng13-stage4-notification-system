@@ -1,14 +1,22 @@
-# build
-FROM rust:1.90 as builder
-WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-RUN cargo build --release
-
-# run
-FROM gcr.io/distroless/cc-debian12
-WORKDIR /app
-COPY --from=builder /app/target/release/api_gateway /app/api_gateway
-ENV RUST_LOG=info
-EXPOSE 8080
-ENTRYPOINT ["/app/api_gateway"]
+# -------- Builder --------
+    FROM rustlang/rust:nightly as builder
+    WORKDIR /app
+    
+    # cache deps
+    COPY Cargo.toml Cargo.lock ./
+    RUN mkdir -p src && echo 'fn main(){}' > src/main.rs
+    RUN cargo build --release || true
+    
+    # build
+    COPY src ./src
+    RUN cargo build --release
+    
+    # -------- Runtime --------
+    FROM debian:bookworm-slim
+    RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+    ENV RUST_LOG=info
+    WORKDIR /app
+    COPY --from=builder /app/target/release/api_gateway /usr/local/bin/api_gateway
+    EXPOSE 8080
+    CMD ["api_gateway"]
+    
